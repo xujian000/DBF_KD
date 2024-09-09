@@ -45,8 +45,8 @@ and the trained model is available in `'./models/'`.
 
 **5. Prepare Data for Distillation**
 
-Put the MRI images in "./EnhanceDataset/vi"
-and the related CT/PET/SPECT in "./EnhanceDataset/ir"
+Put the `'MRI`' images in `'./EnhanceDataset/vi`'
+and the related `'CT/PET/SPECT`' in `'./EnhanceDataset/ir`'
 
 Run
 
@@ -62,7 +62,6 @@ Run
 
 ```
 python distill.py
-
 ```
 
 The trained model is available in `'./models/'`.
