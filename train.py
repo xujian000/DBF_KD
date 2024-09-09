@@ -18,7 +18,7 @@ from Net.DBF_KD import (
 )
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 GPU_number = os.environ["CUDA_VISIBLE_DEVICES"]
 
 batch_size = 8

@@ -43,7 +43,7 @@ from utils.loss import DistillationLossCalculator, FeatureMapDistillationLoss
 Configure our network
 ------------------------------------------------------------------------------
 """
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 criteria_fusion = Fusionloss()
 
 # . Set the hyper-parameters for training

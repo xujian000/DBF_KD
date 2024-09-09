@@ -17,7 +17,7 @@ warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.CRITICAL)
 import cv2
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 CDDFuse_path = r"models/DBF_KD.pth"
 print(f"\n{CDDFuse_path}")
 for dataset_name in ["MRI_CT", "MRI_PET", "MRI_SPECT"]:
@@ -25,8 +25,8 @@ for dataset_name in ["MRI_CT", "MRI_PET", "MRI_SPECT"]:
     print("\t EN\t SD\t SF\t PSNR\t MI\tSCD\tVIF\tQabf\tSSIM")
     for ckpt_path in [CDDFuse_path]:
         model_name = ckpt_path.split("/")[-1].split(".")[0]
-        test_folder = os.path.join("test_img2", dataset_name)
-        test_out_folder = os.path.join("test_result2", dataset_name)
+        test_folder = os.path.join("test_img", dataset_name)
+        test_out_folder = os.path.join("test_result", dataset_name)
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         Encoder = nn.DataParallel(Restormer_Encoder()).to(device)

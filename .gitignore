@@ -1,14 +1,7 @@
 __pycache__/
 utils/__pycache__/
-test_result
-models/
-NormlFuse/Logs/
+test_result/*
 Logs/
-newModels/
-distill/
-image/
-MKMMD/
-mkmmdModels/
-TestResult
+TestResult/*
 MSRS_train
 MSRS_train_imgsize_128_stride_200.h5
