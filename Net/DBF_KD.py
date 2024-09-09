@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import math
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
@@ -8,18 +7,9 @@ from einops import rearrange
 
 
 def drop_path(x, drop_prob: float = 0.0, training: bool = False):
-    """
-    Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
-    This is the same as the DropConnect impl I created for EfficientNet, etc networks, however,
-    the original name is misleading as 'Drop Connect' is a different form of dropout in a separate paper...
-    See discussion: https://github.com/tensorflow/tpu/issues/494#issuecomment-532968956 ... I've opted for
-    changing the layer and argument names to 'drop path' rather than mix DropConnect as a layer name and use
-    'survival rate' as the argument.
-    """
     if drop_prob == 0.0 or not training:
         return x
     keep_prob = 1 - drop_prob
-    # work with diff dim tensors, not just 2D ConvNets
     shape = (x.shape[0],) + (1,) * (x.ndim - 1)
     random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
     random_tensor.floor_()  # binarize
@@ -65,8 +55,6 @@ class AttentionBase(nn.Module):
         v = rearrange(v, "b (head c) h w -> b head c (h w)", head=self.num_heads)
         q = torch.nn.functional.normalize(q, dim=-1)
         k = torch.nn.functional.normalize(k, dim=-1)
-        # transpose: -> [batch_size, num_heads, embed_dim_per_head, num_patches + 1]
-        # @: multiply -> [batch_size, num_heads, num_patches + 1, num_patches + 1]
         attn = (q @ k.transpose(-2, -1)) * self.scale
         attn = attn.softmax(dim=-1)
 
@@ -81,9 +69,6 @@ class AttentionBase(nn.Module):
 
 
 class Mlp(nn.Module):
-    """
-    MLP as used in Vision Transformer, MLP-Mixer and related networks
-    """
 
     def __init__(
         self, in_features, hidden_features=None, ffn_expansion_factor=2, bias=False
@@ -125,7 +110,6 @@ class HardSwish(nn.Module):
 class LowBranch_of_hr_stem(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(LowBranch_of_hr_stem, self).__init__()
-        # 低分辨率分支的卷积层
         self.conv3x3 = nn.Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -136,7 +120,6 @@ class LowBranch_of_hr_stem(nn.Module):
         self.bn_relu1 = nn.Sequential(
             nn.BatchNorm2d(out_channels), nn.ReLU(inplace=True)
         )
-        # 第二个卷积层
         self.conv3x3_2 = nn.Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -147,7 +130,6 @@ class LowBranch_of_hr_stem(nn.Module):
         self.bn_relu2 = nn.Sequential(
             nn.BatchNorm2d(out_channels), nn.ReLU(inplace=True)
         )
-        # 1x1卷积层，输出通道数为32
         self.conv1x1 = nn.Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -169,7 +151,6 @@ class HighBranch_of_stem(nn.Module):
 
     def __init__(self, in_channels, out_channels):
         super(HighBranch_of_stem, self).__init__()
-        # 深度卷积3x3
         self.dwconv3x3 = nn.Conv2d(
             in_channels=in_channels,
             out_channels=in_channels,
@@ -179,7 +160,6 @@ class HighBranch_of_stem(nn.Module):
             groups=in_channels,
         )
         self.bn_relu = nn.Sequential(nn.BatchNorm2d(in_channels), nn.ReLU(inplace=True))
-        # 标准卷积3x3，输出通道数为32
         self.conv3x3 = nn.Conv2d(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -198,16 +178,13 @@ class HighBranch_of_stem(nn.Module):
 class HR_Stem(nn.Module):
     def __init__(self):
         super(HR_Stem, self).__init__()
-        # Conv3*3 Stride=2
         self.initial_conv = nn.Conv2d(
             in_channels=64, out_channels=32, kernel_size=3, stride=1, padding=1
         )
         self.bn_relu = nn.Sequential(nn.BatchNorm2d(32), nn.ReLU(inplace=True))
-        # 低分辨率和高分辨率分支
-        self.LR = LowBranch_of_hr_stem(32, 32)  # 使用更新后的输入通道数
-        self.HR = HighBranch_of_stem(32, 32)  # 使用更新后的输入通道数
+        self.LR = LowBranch_of_hr_stem(32, 32)
+        self.HR = HighBranch_of_stem(32, 32)
 
-        # 1x1卷积层来将通道数调整到64
         self.concat_conv = nn.Conv2d(
             in_channels=64, out_channels=64, kernel_size=1, stride=1, padding=0
         )
@@ -216,12 +193,10 @@ class HR_Stem(nn.Module):
         x = self.initial_conv(x)
         x = self.bn_relu(x)
 
-        lr = self.LR(x)  # 低分辨率分支
-        hr = self.HR(x)  # 高分辨率分支
+        lr = self.LR(x)
+        hr = self.HR(x)
 
-        # 合并特征
         combined_features = torch.cat((lr, hr), dim=1)
-
         return combined_features
 
 
@@ -259,7 +234,6 @@ class LowBranch_of_hr_block(nn.Module):
         # Upsampling to restore spatial dimensions
         self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
 
-        # 使用转置卷积代替Upsample
         self.trans_conv = nn.ConvTranspose2d(
             out_channels, out_channels, kernel_size=2, stride=2, bias=False
         )
@@ -283,7 +257,7 @@ class LowBranch_of_hr_block(nn.Module):
         x = self.conv1x1_2(x)
 
         # Upsample to restore original dimensions
-        x = self.trans_conv(x)  # 使用转置卷积进行上采样
+        x = self.trans_conv(x)
         # Calculate padding to ensure output dimensions match original dimensions
         padding_h = original_h - x.shape[2]
         padding_w = original_w - x.shape[3]
@@ -350,7 +324,7 @@ class HighBranch_of_hr_block(nn.Module):
         # Depthwise Convolution 3x3
         self.dwconv = nn.Conv2d(
             in_channels,
-            out_channels,  # 直接将输出通道数设为out_channels
+            out_channels,
             kernel_size=3,
             stride=1,
             padding=1,
@@ -359,7 +333,7 @@ class HighBranch_of_hr_block(nn.Module):
         )
 
         # Batch Normalization
-        self.bn = nn.BatchNorm2d(out_channels)  # BN的通道数也需要改为out_channels
+        self.bn = nn.BatchNorm2d(out_channels)
 
     def forward(self, x):
         # Apply Depthwise Convolution
@@ -374,14 +348,13 @@ class HighBranch_of_hr_block(nn.Module):
 class HR_Block(nn.Module):
     def __init__(self):
         super(HR_Block, self).__init__()
-        self.LR = LowBranch_of_hr_block(64, 64)  # 使用更新后的输入通道数
-        self.HR = HighBranch_of_hr_block(64, 64)  # 使用更新后的输入通道数
+        self.LR = LowBranch_of_hr_block(64, 64)
+        self.HR = HighBranch_of_hr_block(64, 64)
 
     def forward(self, x):
-        lr = self.LR(x)  # 低分辨率分支
-        hr = self.HR(x)  # 高分辨率分支
+        lr = self.LR(x)
+        hr = self.HR(x)
 
-        # 合并特征
         combined_features = lr + hr
         return combined_features + x
 
@@ -390,7 +363,6 @@ class IRDS_a(nn.Module):
     def __init__(self, in_channels=64):  # Updated to 64 channels
         super(IRDS_a, self).__init__()
 
-        # 左分支
         self.left_conv1 = nn.Conv2d(
             in_channels, in_channels, kernel_size=3, stride=2, padding=1, bias=False
         )
@@ -400,24 +372,20 @@ class IRDS_a(nn.Module):
             in_channels, in_channels, kernel_size=1, stride=1, bias=False
         )
 
-        # 右分支
         self.right_avgpool = nn.AvgPool2d(kernel_size=2, stride=2)
         self.right_conv = nn.Conv2d(
             in_channels, in_channels, kernel_size=1, stride=1, bias=False
         )
 
     def forward(self, x):
-        # 左分支
         left = self.left_conv1(x)
         left = self.left_bn(left)
         left = self.left_relu(left)
         left = self.left_conv2(left)
 
-        # 右分支
         right = self.right_avgpool(x)
         right = self.right_conv(right)
 
-        # 相加操作
         right = nn.functional.interpolate(
             right, size=left.size()[2:], mode="bilinear", align_corners=False
         )
@@ -443,7 +411,6 @@ class BaseFeatureExtraction(nn.Module):
             qkv_bias=qkv_bias,
         )
         self.norm2 = LayerNorm(dim, "WithBias")
-        # 多层感知机 实现前向传播网络，用于增强特征的非线性表示。
         self.mlp = Mlp(
             in_features=dim,
             ffn_expansion_factor=ffn_expansion_factor,
@@ -458,10 +425,6 @@ class BaseFeatureExtraction(nn.Module):
         return x
 
 
-# =============================================================================
-
-
-# cdd 算法里其实没有残差项
 class InvertedResidualBlock(nn.Module):
     def __init__(self, inp, oup, expand_ratio):
         super(InvertedResidualBlock, self).__init__()
@@ -520,11 +483,9 @@ class DetailFeatureExtraction(nn.Module):
         return torch.cat((z1, z2), dim=1)
 
 
-# =============================================================================
 import numbers
 
 
-##########################################################################
 ## Layer Norm
 def to_3d(x):
     return rearrange(x, "b c h w -> b (h w) c")
@@ -583,8 +544,6 @@ class LayerNorm(nn.Module):
         return to_4d(self.body(to_3d(x)), h, w)
 
 
-##########################################################################
-## Gated-Dconv Feed-Forward Network (GDFN)
 class FeedForward(nn.Module):
     def __init__(self, dim, ffn_expansion_factor, bias):
         super(FeedForward, self).__init__()
@@ -613,8 +572,6 @@ class FeedForward(nn.Module):
         return x
 
 
-##########################################################################
-## Multi-DConv Head Transposed Self-Attention (MDTA)
 class Attention(nn.Module):
     def __init__(self, dim, num_heads, bias):
         super(Attention, self).__init__()
@@ -659,7 +616,6 @@ class Attention(nn.Module):
         return out
 
 
-##########################################################################
 class TransformerBlock(nn.Module):
     def __init__(self, dim, num_heads, ffn_expansion_factor, bias, LayerNorm_type):
         super(TransformerBlock, self).__init__()
@@ -676,7 +632,6 @@ class TransformerBlock(nn.Module):
         return x
 
 
-##########################################################################
 ## Overlapped image patch embedding with 3x3 Conv
 class OverlapPatchEmbed(nn.Module):
     def __init__(self, in_c=3, embed_dim=48, bias=False):
@@ -1041,16 +996,16 @@ class FlowLayer(nn.Module):
     def __init__(self, input_dim):
         super(FlowLayer, self).__init__()
         self.conv1 = nn.Conv2d(input_dim, input_dim, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(input_dim)  # 添加BatchNorm
+        self.bn1 = nn.BatchNorm2d(input_dim)
         self.conv2 = nn.Conv2d(input_dim, input_dim, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(input_dim)  # 添加BatchNorm
+        self.bn2 = nn.BatchNorm2d(input_dim)
         self.affine = nn.Conv2d(input_dim, input_dim * 2, kernel_size=1)
 
     def forward(self, x):
         h = F.relu(self.bn1(self.conv1(x)))
         h = F.relu(self.bn2(self.conv2(h)))
         s, t = self.affine(h).chunk(2, dim=1)
-        s = torch.clamp(s, min=-10, max=10)  # 对s进行裁剪
+        s = torch.clamp(s, min=-10, max=10)
         return x * torch.exp(s) + t
 
 
