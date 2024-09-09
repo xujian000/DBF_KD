@@ -43,14 +43,12 @@ python train.py
 
 and the trained model is available in `'./models/'`.
 
-**5. Distillation**
+**5. Prepare Data for Distillation**
+
+Put the MRI images in "./EnhanceDataset/vi"
+and the related CT/PET/SPECT in "./EnhanceDataset/ir"
 
 Run
-
-Copy the extra Medical Images for enhance the model, you can use any dataset you have
-Put the MRI images in "./EnhanceDataset/vi" and the related CT/PET/SPECT in "./EnhanceDataset/ir"
-
-and then run
 
 ```
 python prepare_data_enhance.py
@@ -58,14 +56,16 @@ python prepare_data_enhance.py
 
 the processed extra dataset which used in distillation is in `'./data/Data4Enhance_imgsize_128_stride_200.h5'`.
 
+**6. Distillation**
+
+Run
+
 ```
-
-and then run
-
 python distill.py
+
 ```
 
-and the trained model is available in `'./models/'`.
+The trained model is available in `'./models/'`.
 
 ### 🏄 Testing
 

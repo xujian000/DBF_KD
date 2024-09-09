@@ -348,7 +348,7 @@ for e in range(epoch):
         "BaseFuseLayer": BaseFuseLayer_std.state_dict(),
         "DetailFuseLayer": DetailFuseLayer_std.state_dict(),
     }
-    save_path = os.path.join(f"newModels/{result_name}_{e}.pth")
+    save_path = os.path.join(f"models/{result_name}_{e}.pth")
     torch.save(checkpoint, save_path)
     print(f"SAVE {save_path} SUCCESS")
 
