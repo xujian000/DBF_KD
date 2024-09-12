@@ -18,14 +18,14 @@ from Net.DBF_KD import (
 )
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 GPU_number = os.environ["CUDA_VISIBLE_DEVICES"]
 
 batch_size = 8
-num_epochs = 40  # total epoch
+num_epochs = 10  # total epoch
 
 criteria_fusion = Fusionloss()
-result_name = f"CDD_{batch_size}_{num_epochs}"
+result_name = f"DBF_{batch_size}_{num_epochs}"
 
 lr = 1e-4
 weight_decay = 0

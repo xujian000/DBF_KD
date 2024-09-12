@@ -194,9 +194,9 @@ def msssim(
     return loss
 
 
-class DistillationLossCalculator(nn.Module):
+class SoftLabelLoss(nn.Module):
     def __init__(self, temperature=1.0):
-        super(DistillationLossCalculator, self).__init__()
+        super(SoftLabelLoss, self).__init__()
         self.temperature = temperature
         self.conv1x1 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=1)
         self.global_pool = nn.AdaptiveAvgPool2d(1)
@@ -224,9 +224,9 @@ class DistillationLossCalculator(nn.Module):
         return kl_div_loss
 
 
-class FeatureMapDistillationLoss(nn.Module):
+class FeatureMapLoss(nn.Module):
     def __init__(self, reduction="mean"):
-        super(FeatureMapDistillationLoss, self).__init__()
+        super(FeatureMapLoss, self).__init__()
         self.reduction = reduction
 
     def forward(self, teacher_features, student_features):

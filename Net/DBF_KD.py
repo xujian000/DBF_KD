@@ -1,33 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.utils.checkpoint as checkpoint
-from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 from einops import rearrange
-
-
-def drop_path(x, drop_prob: float = 0.0, training: bool = False):
-    if drop_prob == 0.0 or not training:
-        return x
-    keep_prob = 1 - drop_prob
-    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
-    random_tensor.floor_()  # binarize
-    output = x.div(keep_prob) * random_tensor
-    return output
-
-
-class DropPath(nn.Module):
-    """
-    Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
-    """
-
-    def __init__(self, drop_prob=None):
-        super(DropPath, self).__init__()
-        self.drop_prob = drop_prob
-
-    def forward(self, x):
-        return drop_path(x, self.drop_prob, self.training)
 
 
 class AttentionBase(nn.Module):
@@ -39,7 +13,6 @@ class AttentionBase(nn.Module):
     ):
         super(AttentionBase, self).__init__()
         self.num_heads = num_heads
-        head_dim = dim // num_heads
         self.scale = nn.Parameter(torch.ones(num_heads, 1, 1))
         self.qkv1 = nn.Conv2d(dim, dim * 3, kernel_size=1, bias=qkv_bias)
         self.qkv2 = nn.Conv2d(dim * 3, dim * 3, kernel_size=3, padding=1, bias=qkv_bias)
@@ -69,7 +42,6 @@ class AttentionBase(nn.Module):
 
 
 class Mlp(nn.Module):
-
     def __init__(
         self, in_features, hidden_features=None, ffn_expansion_factor=2, bias=False
     ):
@@ -357,42 +329,6 @@ class HR_Block(nn.Module):
 
         combined_features = lr + hr
         return combined_features + x
-
-
-class IRDS_a(nn.Module):
-    def __init__(self, in_channels=64):  # Updated to 64 channels
-        super(IRDS_a, self).__init__()
-
-        self.left_conv1 = nn.Conv2d(
-            in_channels, in_channels, kernel_size=3, stride=2, padding=1, bias=False
-        )
-        self.left_bn = nn.BatchNorm2d(in_channels)
-        self.left_relu = nn.ReLU(inplace=True)
-        self.left_conv2 = nn.Conv2d(
-            in_channels, in_channels, kernel_size=1, stride=1, bias=False
-        )
-
-        self.right_avgpool = nn.AvgPool2d(kernel_size=2, stride=2)
-        self.right_conv = nn.Conv2d(
-            in_channels, in_channels, kernel_size=1, stride=1, bias=False
-        )
-
-    def forward(self, x):
-        left = self.left_conv1(x)
-        left = self.left_bn(left)
-        left = self.left_relu(left)
-        left = self.left_conv2(left)
-
-        right = self.right_avgpool(x)
-        right = self.right_conv(right)
-
-        right = nn.functional.interpolate(
-            right, size=left.size()[2:], mode="bilinear", align_corners=False
-        )
-
-        out = left + right
-
-        return out
 
 
 class BaseFeatureExtraction(nn.Module):

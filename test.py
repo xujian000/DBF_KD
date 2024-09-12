@@ -17,8 +17,8 @@ warnings.filterwarnings("ignore")
 logging.basicConfig(level=logging.CRITICAL)
 import cv2
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-CDDFuse_path = r"models/DBF_KD.pth"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+CDDFuse_path = r"models/DBF_KD_distilled.pth"
 print(f"\n{CDDFuse_path}")
 for dataset_name in ["MRI_CT", "MRI_PET", "MRI_SPECT"]:
     print(dataset_name)
@@ -38,10 +38,11 @@ for dataset_name in ["MRI_CT", "MRI_PET", "MRI_SPECT"]:
             device
         )
 
-        Encoder.load_state_dict(torch.load(ckpt_path)["DIDF_Encoder"])
-        Decoder.load_state_dict(torch.load(ckpt_path)["DIDF_Decoder"])
+        Encoder.load_state_dict(torch.load(ckpt_path)["Encoder"])
+        Decoder.load_state_dict(torch.load(ckpt_path)["Decoder"])
         BaseFuseLayer.load_state_dict(torch.load(ckpt_path)["BaseFuseLayer"])
         DetailFuseLayer.load_state_dict(torch.load(ckpt_path)["DetailFuseLayer"])
+
         Encoder.eval()
         Decoder.eval()
         BaseFuseLayer.eval()
@@ -75,12 +76,7 @@ for dataset_name in ["MRI_CT", "MRI_PET", "MRI_SPECT"]:
                 feature_I_B, feature_I_D, feature_I = Encoder(data_IR)
                 feature_F_B = BaseFuseLayer(feature_V_B + feature_I_B)
                 feature_F_D = DetailFuseLayer(feature_V_D + feature_I_D)
-                # if ckpt_path == CDDFuse_path:
-                #     data_Fuse, _ = Decoder(data_IR + data_VIS, feature_F_B, feature_F_D)
-                # else:
                 data_Fuse, _ = Decoder(data_IR + data_VIS, feature_F_B, feature_F_D)
-                # data_Fuse, _ = Decoder(data_VIS, feature_F_B, feature_F_D)
-
                 data_Fuse = (data_Fuse - torch.min(data_Fuse)) / (
                     torch.max(data_Fuse) - torch.min(data_Fuse)
                 )

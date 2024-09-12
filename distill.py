@@ -7,18 +7,19 @@ Import packages
 """
 import sys
 import os
-from torch.utils.data import DataLoader, ConcatDataset, Subset
-import numpy as np
+from torch.utils.data import DataLoader, ConcatDataset
+
 from Net.CDDFuse import (
     Restormer_Encoder,
     Restormer_Decoder,
     BaseFeatureExtraction,
     DetailFeatureExtraction,
 )
-from Net.DBF_KD import Restormer_Encoder as Restormer_Encoder_HR
-from Net.DBF_KD import Restormer_Decoder as Restormer_Decoder_HR
-from Net.DBF_KD import BaseFeatureExtraction as BaseFeatureExtraction_HR
-from Net.DBF_KD import DetailFeatureExtraction as DetailFeatureExtraction_HR
+
+from Net.DBF_KD import Restormer_Encoder as Restormer_Encoder_HI
+from Net.DBF_KD import Restormer_Decoder as Restormer_Decoder_HI
+from Net.DBF_KD import BaseFeatureExtraction as BaseFeatureExtraction_HI
+from Net.DBF_KD import DetailFeatureExtraction as DetailFeatureExtraction_HI
 from torch.utils.data import DataLoader, ConcatDataset
 
 
@@ -28,86 +29,75 @@ import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
 import sys
 import time
-import datetime
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from utils.loss import Fusionloss, cc
 import kornia
 import logging
-from utils.loss import DistillationLossCalculator, FeatureMapDistillationLoss
+from utils.loss import SoftLabelLoss, FeatureMapLoss
 
 
-"""
-------------------------------------------------------------------------------
-Configure our network
-------------------------------------------------------------------------------
-"""
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-criteria_fusion = Fusionloss()
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 # . Set the hyper-parameters for training
-epoch = 40
+epoch1 = 4
+epoch2 = 10
+
 
 teacher_name = "CDDFuse_IVF"
-teacher_path = f"Models/{teacher_name}.pth"
-result_name = f"Enhance_{teacher_name}_epoch{epoch}_std"
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(f"Logs/{result_name}.txt"), logging.StreamHandler()],
-)
+teacher_path = f"models/{teacher_name}.pth"
+std_name = f"DBF_KD"
 
 lr = 1e-4
 weight_decay = 0
 batch_size = 6
 GPU_number = os.environ["CUDA_VISIBLE_DEVICES"]
-# Coefficients of the loss function
 coeff_mse_loss_VF = 1.0  # alpha1
 coeff_mse_loss_IF = 1.0
 coeff_decomp = 2.0  # alpha2 and alpha4
 coeff_tv = 5.0
 
 clip_grad_norm_value = 0.01
-optim_step = 20
+optim_step = 2
 optim_gamma = 0.5
+
+
+criteria_fusion = Fusionloss()
+MSELoss = nn.MSELoss()
+L1Loss = nn.L1Loss()
+Loss_ssim = kornia.losses.SSIM(11, reduction="mean")
+
 
 # Device
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Model
-DIDF_Encoder = nn.DataParallel(Restormer_Encoder()).to(device)
-DIDF_Decoder = nn.DataParallel(Restormer_Decoder()).to(device)
-BaseFuseLayer = nn.DataParallel(BaseFeatureExtraction(dim=64, num_heads=8)).to(device)
-DetailFuseLayer = nn.DataParallel(DetailFeatureExtraction(num_layers=1)).to(device)
+# TeacherModel
+Encoder_t = nn.DataParallel(Restormer_Encoder()).to(device)
+Decoder_t = nn.DataParallel(Restormer_Decoder()).to(device)
+BaseFuseLayer_t = nn.DataParallel(BaseFeatureExtraction(dim=64, num_heads=8)).to(device)
+DetailFuseLayer_t = nn.DataParallel(DetailFeatureExtraction(num_layers=1)).to(device)
 
-DIDF_Encoder.load_state_dict(torch.load(teacher_path)["DIDF_Encoder"])
-DIDF_Decoder.load_state_dict(torch.load(teacher_path)["DIDF_Decoder"])
-BaseFuseLayer.load_state_dict(torch.load(teacher_path)["BaseFuseLayer"])
-DetailFuseLayer.load_state_dict(torch.load(teacher_path)["DetailFuseLayer"])
-
-DIDF_Encoder_std = nn.DataParallel(Restormer_Encoder_HR()).to(device)
-DIDF_Decoder_std = nn.DataParallel(Restormer_Decoder_HR()).to(device)
-BaseFuseLayer_std = nn.DataParallel(BaseFeatureExtraction_HR(dim=64, num_heads=8)).to(
+Encoder_t.load_state_dict(torch.load(teacher_path)["Encoder"])
+Decoder_t.load_state_dict(torch.load(teacher_path)["Decoder"])
+BaseFuseLayer_t.load_state_dict(torch.load(teacher_path)["BaseFuseLayer"])
+DetailFuseLayer_t.load_state_dict(torch.load(teacher_path)["DetailFuseLayer"])
+# StdModel
+Encoder_s = nn.DataParallel(Restormer_Encoder_HI()).to(device)
+Decoder_s = nn.DataParallel(Restormer_Decoder_HI()).to(device)
+BaseFuseLayer_s = nn.DataParallel(BaseFeatureExtraction_HI(dim=64, num_heads=8)).to(
     device
 )
-DetailFuseLayer_std = nn.DataParallel(DetailFeatureExtraction_HR(num_layers=1)).to(
-    device
-)
+DetailFuseLayer_s = nn.DataParallel(DetailFeatureExtraction_HI(num_layers=1)).to(device)
 
 # optimizer, scheduler and loss function
-optimizer1 = torch.optim.Adam(
-    DIDF_Encoder_std.parameters(), lr=lr, weight_decay=weight_decay
-)
-optimizer2 = torch.optim.Adam(
-    DIDF_Decoder_std.parameters(), lr=lr, weight_decay=weight_decay
-)
+optimizer1 = torch.optim.Adam(Encoder_s.parameters(), lr=lr, weight_decay=weight_decay)
+optimizer2 = torch.optim.Adam(Decoder_s.parameters(), lr=lr, weight_decay=weight_decay)
 optimizer3 = torch.optim.Adam(
-    BaseFuseLayer_std.parameters(), lr=lr, weight_decay=weight_decay
+    BaseFuseLayer_s.parameters(), lr=lr, weight_decay=weight_decay
 )
 optimizer4 = torch.optim.Adam(
-    DetailFuseLayer_std.parameters(), lr=lr, weight_decay=weight_decay
+    DetailFuseLayer_s.parameters(), lr=lr, weight_decay=weight_decay
 )
 
 scheduler1 = torch.optim.lr_scheduler.StepLR(
@@ -125,15 +115,19 @@ scheduler4 = torch.optim.lr_scheduler.StepLR(
 
 
 # Loss
-MSELoss = nn.MSELoss()
-L1Loss = nn.L1Loss()
-Loss_ssim = kornia.losses.SSIM(11, reduction="mean")
 
-dataset1 = H5Dataset(r"data/MSRS_train_imgsize_128_stride_200.h5")
-dataset2 = H5Dataset(r"data/Data4Enhance_imgsize_128_stride_200.h5")
-combined_dataset = ConcatDataset([dataset1, dataset2])
-trainloader = DataLoader(
-    combined_dataset,
+
+visual_infrared_dataset = H5Dataset(r"data/MSRS_train_imgsize_128_stride_200.h5")
+medical_dataset = H5Dataset(r"data/Data4Enhance_imgsize_128_stride_200.h5")
+
+dataLoader_viir = DataLoader(
+    visual_infrared_dataset,
+    batch_size=batch_size,
+    shuffle=True,
+    num_workers=0,
+)
+dataLoader_medical = DataLoader(
+    medical_dataset,
     batch_size=batch_size,
     shuffle=True,
     num_workers=0,
@@ -150,33 +144,35 @@ step = 0
 torch.backends.cudnn.benchmark = True
 prev_time = time.time()
 
-softlabel_diff_calculator = DistillationLossCalculator(temperature=4.0).to(device)
-feature_map_diff_calculator = FeatureMapDistillationLoss(reduction="mean").to(device)
+softlabel_diff_calculator = SoftLabelLoss(temperature=4.0).to(device)
+feature_map_diff_calculator = FeatureMapLoss(reduction="mean").to(device)
 
-for e in range(epoch):
-    for i, (data_VI, data_IR) in enumerate(trainloader):
 
+Encoder_t.eval()
+Decoder_t.eval()
+BaseFuseLayer_t.eval()
+DetailFuseLayer_t.eval()
+
+Encoder_s.train()
+Decoder_s.train()
+BaseFuseLayer_s.train()
+DetailFuseLayer_s.train()
+
+
+for e in range(epoch1):
+    dataLoader = dataLoader_viir
+    print("Viir Loader")
+    for i, (data_VI, data_IR) in enumerate(dataLoader):
         data_VI, data_IR = data_VI.cuda(), data_IR.cuda()
+        Encoder_t.zero_grad()
+        Decoder_t.zero_grad()
+        BaseFuseLayer_t.zero_grad()
+        DetailFuseLayer_t.zero_grad()
 
-        DIDF_Encoder.eval()
-        DIDF_Decoder.eval()
-        BaseFuseLayer.eval()
-        DetailFuseLayer.eval()
-
-        DIDF_Encoder_std.train()
-        DIDF_Decoder_std.train()
-        BaseFuseLayer_std.train()
-        DetailFuseLayer_std.train()
-
-        DIDF_Encoder.zero_grad()
-        DIDF_Decoder.zero_grad()
-        BaseFuseLayer.zero_grad()
-        DetailFuseLayer.zero_grad()
-
-        DIDF_Encoder_std.zero_grad()
-        DIDF_Decoder_std.zero_grad()
-        BaseFuseLayer_std.zero_grad()
-        DetailFuseLayer_std.zero_grad()
+        Encoder_s.zero_grad()
+        Decoder_s.zero_grad()
+        BaseFuseLayer_s.zero_grad()
+        DetailFuseLayer_s.zero_grad()
 
         optimizer1.zero_grad()
         optimizer2.zero_grad()
@@ -184,27 +180,29 @@ for e in range(epoch):
         optimizer4.zero_grad()
 
         # Phase I
-        feature_V_B, feature_V_D, _ = DIDF_Encoder(data_VI)
-        feature_I_B, feature_I_D, _ = DIDF_Encoder(data_IR)
-        feature_V_B_std, feature_V_D_std, _ = DIDF_Encoder_std(data_VI)
-        feature_I_B_std, feature_I_D_std, _ = DIDF_Encoder_std(data_IR)
+        feature_V_B, feature_V_D, _ = Encoder_t(data_VI)
+        feature_I_B, feature_I_D, _ = Encoder_t(data_IR)
+        feature_V_B_std, feature_V_D_std, _ = Encoder_s(data_VI)
+        feature_I_B_std, feature_I_D_std, _ = Encoder_s(data_IR)
+
         # featureMapLoss (encoder)
         featureMapLoss_VB = feature_map_diff_calculator(feature_V_B, feature_V_B_std)
         featureMapLoss_VD = feature_map_diff_calculator(feature_V_D, feature_V_D_std)
         featureMapLoss_IB = feature_map_diff_calculator(feature_I_B, feature_I_B_std)
         featureMapLoss_ID = feature_map_diff_calculator(feature_I_D, feature_I_D_std)
+
         # SoftLabel loss (encoder)
         vb_softlabel_loss = softlabel_diff_calculator(feature_V_B, feature_V_B_std)
         vd_softlabel_loss = softlabel_diff_calculator(feature_V_B, feature_V_B_std)
         ib_softlabel_loss = softlabel_diff_calculator(feature_V_B, feature_V_B_std)
         id_softlabel_loss = softlabel_diff_calculator(feature_V_B, feature_V_B_std)
 
-        data_VI_hat, data_VI_feature = DIDF_Decoder(data_VI, feature_V_B, feature_V_D)
-        data_IR_hat, data_IR_feature = DIDF_Decoder(data_IR, feature_I_B, feature_I_D)
-        data_VI_hat_std, data_VI_feature_std = DIDF_Decoder_std(
+        data_VI_hat, data_VI_feature = Decoder_t(data_VI, feature_V_B, feature_V_D)
+        data_IR_hat, data_IR_feature = Decoder_t(data_IR, feature_I_B, feature_I_D)
+        data_VI_hat_std, data_VI_feature_std = Decoder_s(
             data_VI, feature_V_B_std, feature_V_D_std
         )
-        data_IR_hat_std, data_IR_feature_std = DIDF_Decoder_std(
+        data_IR_hat_std, data_IR_feature_std = Decoder_s(
             data_IR, feature_I_B_std, feature_I_D_std
         )
 
@@ -226,6 +224,7 @@ for e in range(epoch):
         # recon_loss
         cc_loss_B = cc(feature_V_B_std, feature_I_B_std)
         cc_loss_D = cc(feature_V_D_std, feature_I_D_std)
+
         mse_loss_V = 5 * Loss_ssim(data_VI, data_VI_hat_std) + MSELoss(
             data_VI, data_VI_hat_std
         )
@@ -270,40 +269,40 @@ for e in range(epoch):
         loss.backward()
 
         nn.utils.clip_grad_norm_(
-            DIDF_Encoder_std.parameters(),
+            Encoder_s.parameters(),
             max_norm=clip_grad_norm_value,
             norm_type=2,
         )
         nn.utils.clip_grad_norm_(
-            DIDF_Decoder_std.parameters(),
+            Decoder_s.parameters(),
             max_norm=clip_grad_norm_value,
             norm_type=2,
         )
         optimizer1.step()
         optimizer2.step()
 
-        info = f"\r[Epoch {e}/{epoch}],[Batch {i}/{len(trainloader)}],[Loss:{loss.item():.5f}],[Task:{recon_loss.item():.5f}],[Soft:{softLabelLoss_encoder.item():.5f}], [Feature:{featureMapLoss_encoder.item():.5f}]"
+        info = f"\r[Epoch {e}/{epoch1}],[Batch {i}/{len(dataLoader)}],[Loss:{loss.item():.5f}],[Task:{recon_loss.item():.5f}],[Soft:{softLabelLoss_encoder.item():.5f}], [Feature:{featureMapLoss_encoder.item():.5f}]"
 
-        # Phase II
-        feature_V_B, feature_V_D, feature_V = DIDF_Encoder(data_VI)
-        feature_I_B, feature_I_D, feature_I = DIDF_Encoder(data_IR)
+        feature_V_B, feature_V_D, feature_V = Encoder_t(data_VI)
+        feature_I_B, feature_I_D, feature_I = Encoder_t(data_IR)
 
-        feature_F_B = BaseFuseLayer(feature_I_B + feature_V_B)
-        feature_F_D = DetailFuseLayer(feature_I_D + feature_V_D)
+        feature_F_B = BaseFuseLayer_t(feature_I_B + feature_V_B)
+        feature_F_D = DetailFuseLayer_t(feature_I_D + feature_V_D)
 
-        feature_F_B_std = BaseFuseLayer_std(feature_I_B + feature_V_B)
-        feature_F_D_std = DetailFuseLayer_std(feature_I_D + feature_V_D)
+        feature_F_B_std = BaseFuseLayer_s(feature_I_B + feature_V_B)
+        feature_F_D_std = DetailFuseLayer_s(feature_I_D + feature_V_D)
 
         # SoftLabel loss
         softlabelLoss_B = softlabel_diff_calculator(feature_F_B, feature_F_B_std)
         softlabelLoss_D = softlabel_diff_calculator(feature_F_D, feature_F_D_std)
         softLabelLoss_fuseLayer = softlabelLoss_B + softlabelLoss_D
+
         # featureMapLoss
         featureMapLoss_B = feature_map_diff_calculator(feature_F_B, feature_F_B_std)
         featureMapLoss_D = feature_map_diff_calculator(feature_F_D, feature_F_D_std)
         featureMapLoss_fuseLayer = featureMapLoss_B + featureMapLoss_D
-        data_Fuse, feature_F = DIDF_Decoder(data_VI, feature_F_B, feature_F_D)
-        data_Fuse_std, feature_F_std = DIDF_Decoder_std(
+        data_Fuse, feature_F = Decoder_t(data_VI, feature_F_B, feature_F_D)
+        data_Fuse_std, feature_F_std = Decoder_s(
             data_VI, feature_F_B_std, feature_F_D_std
         )
         fusionloss, _, _ = criteria_fusion(data_VI, data_IR, data_Fuse_std)
@@ -323,40 +322,124 @@ for e in range(epoch):
 
         loss.backward()
         nn.utils.clip_grad_norm_(
-            DIDF_Encoder.parameters(), max_norm=clip_grad_norm_value, norm_type=2
+            Encoder_t.parameters(), max_norm=clip_grad_norm_value, norm_type=2
         )
         nn.utils.clip_grad_norm_(
-            DIDF_Decoder.parameters(), max_norm=clip_grad_norm_value, norm_type=2
+            Decoder_t.parameters(), max_norm=clip_grad_norm_value, norm_type=2
         )
         nn.utils.clip_grad_norm_(
-            BaseFuseLayer.parameters(), max_norm=clip_grad_norm_value, norm_type=2
+            BaseFuseLayer_t.parameters(), max_norm=clip_grad_norm_value, norm_type=2
         )
         nn.utils.clip_grad_norm_(
-            DetailFuseLayer.parameters(), max_norm=clip_grad_norm_value, norm_type=2
+            DetailFuseLayer_t.parameters(),
+            max_norm=clip_grad_norm_value,
+            norm_type=2,
         )
         optimizer1.step()
         optimizer2.step()
         optimizer3.step()
         optimizer4.step()
 
-        info = f"\r[Epoch {e}/{epoch}],[Batch {i}/{len(trainloader)}],[Loss:{loss.item():.5f}],[Task:{recon_loss.item():.5f}],[Soft:{softLabelLoss_encoder.item():.5f}], [Feature:{featureMapLoss_encoder.item():.5f}]"
+        info = f"\r[Epoch {e}/{epoch1}],[Batch {i}/{len(dataLoader)}],[Loss:{loss.item():.5f}],[Task:{recon_loss.item():.5f}],[distill:{distillation_loss2.item():.5f}]"
         sys.stdout.write(info)
 
-    checkpoint = {
-        "DIDF_Encoder": DIDF_Encoder_std.state_dict(),
-        "DIDF_Decoder": DIDF_Decoder_std.state_dict(),
-        "BaseFuseLayer": BaseFuseLayer_std.state_dict(),
-        "DetailFuseLayer": DetailFuseLayer_std.state_dict(),
-    }
-    save_path = os.path.join(f"models/{result_name}_{e}.pth")
-    torch.save(checkpoint, save_path)
-    print(f"SAVE {save_path} SUCCESS")
 
-    if optimizer1.param_groups[0]["lr"] <= 1e-6:
-        optimizer1.param_groups[0]["lr"] = 1e-6
-    if optimizer2.param_groups[0]["lr"] <= 1e-6:
-        optimizer2.param_groups[0]["lr"] = 1e-6
-    if optimizer3.param_groups[0]["lr"] <= 1e-6:
-        optimizer3.param_groups[0]["lr"] = 1e-6
-    if optimizer4.param_groups[0]["lr"] <= 1e-6:
-        optimizer4.param_groups[0]["lr"] = 1e-6
+for e in range(epoch2):
+    dataLoader = dataLoader_medical
+    print("Medical Loader")
+    for i, (data_VI, data_IR) in enumerate(dataLoader):
+        data_VI, data_IR = data_VI.cuda(), data_IR.cuda()
+        Encoder_t.zero_grad()
+        Decoder_t.zero_grad()
+        BaseFuseLayer_t.zero_grad()
+        DetailFuseLayer_t.zero_grad()
+
+        Encoder_s.zero_grad()
+        Decoder_s.zero_grad()
+        BaseFuseLayer_s.zero_grad()
+        DetailFuseLayer_s.zero_grad()
+
+        optimizer1.zero_grad()
+        optimizer2.zero_grad()
+        optimizer3.zero_grad()
+        optimizer4.zero_grad()
+
+        feature_V_B, feature_V_D, feature_V = Encoder_t(data_VI)
+        feature_I_B, feature_I_D, feature_I = Encoder_t(data_IR)
+
+        feature_F_B = BaseFuseLayer_t(feature_I_B + feature_V_B)
+        feature_F_D = DetailFuseLayer_t(feature_I_D + feature_V_D)
+
+        feature_F_B_std = BaseFuseLayer_s(feature_I_B + feature_V_B)
+        feature_F_D_std = DetailFuseLayer_s(feature_I_D + feature_V_D)
+
+        # SoftLabel loss
+        softlabelLoss_B = softlabel_diff_calculator(feature_F_B, feature_F_B_std)
+        softlabelLoss_D = softlabel_diff_calculator(feature_F_D, feature_F_D_std)
+        softLabelLoss_fuseLayer = softlabelLoss_B + softlabelLoss_D
+
+        # featureMapLoss
+        featureMapLoss_B = feature_map_diff_calculator(feature_F_B, feature_F_B_std)
+        featureMapLoss_D = feature_map_diff_calculator(feature_F_D, feature_F_D_std)
+        featureMapLoss_fuseLayer = featureMapLoss_B + featureMapLoss_D
+        data_Fuse, feature_F = Decoder_t(data_VI, feature_F_B, feature_F_D)
+        data_Fuse_std, feature_F_std = Decoder_s(
+            data_VI, feature_F_B_std, feature_F_D_std
+        )
+        fusionloss, _, _ = criteria_fusion(data_VI, data_IR, data_Fuse_std)
+
+        featureMapLoss_decoder = feature_map_diff_calculator(feature_F, feature_F_std)
+        softlabelLoss_decoder = softlabel_diff_calculator(feature_F, feature_F_std)
+
+        distillation_loss2 = (
+            softLabelLoss_fuseLayer
+            + featureMapLoss_fuseLayer
+            + featureMapLoss_decoder
+            + softlabelLoss_decoder
+        )
+
+        recon_loss = fusionloss
+        loss = recon_loss + distillation_loss2 * 0.1
+
+        loss.backward()
+        nn.utils.clip_grad_norm_(
+            Encoder_t.parameters(), max_norm=clip_grad_norm_value, norm_type=2
+        )
+        nn.utils.clip_grad_norm_(
+            Decoder_t.parameters(), max_norm=clip_grad_norm_value, norm_type=2
+        )
+        nn.utils.clip_grad_norm_(
+            BaseFuseLayer_t.parameters(), max_norm=clip_grad_norm_value, norm_type=2
+        )
+        nn.utils.clip_grad_norm_(
+            DetailFuseLayer_t.parameters(),
+            max_norm=clip_grad_norm_value,
+            norm_type=2,
+        )
+        optimizer1.step()
+        optimizer2.step()
+        optimizer3.step()
+        optimizer4.step()
+
+        info = f"\r[Epoch {e}/{epoch1}],[Batch {i}/{len(dataLoader)}],[Loss:{loss.item():.5f}],[Task:{recon_loss.item():.5f}]"
+        sys.stdout.write(info)
+
+
+checkpoint = {
+    "Encoder": Encoder_s.state_dict(),
+    "Decoder": Decoder_s.state_dict(),
+    "BaseFuseLayer": BaseFuseLayer_s.state_dict(),
+    "DetailFuseLayer": DetailFuseLayer_s.state_dict(),
+}
+save_path = os.path.join(f"models/{std_name}.pth")
+torch.save(checkpoint, save_path)
+print(f"SAVE {save_path} SUCCESS")
+
+if optimizer1.param_groups[0]["lr"] <= 1e-6:
+    optimizer1.param_groups[0]["lr"] = 1e-6
+if optimizer2.param_groups[0]["lr"] <= 1e-6:
+    optimizer2.param_groups[0]["lr"] = 1e-6
+if optimizer3.param_groups[0]["lr"] <= 1e-6:
+    optimizer3.param_groups[0]["lr"] = 1e-6
+if optimizer4.param_groups[0]["lr"] <= 1e-6:
+    optimizer4.param_groups[0]["lr"] = 1e-6
